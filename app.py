@@ -6,11 +6,15 @@ import json
 import os
 import time
 from duckduckgo_search import DDGS
+import urllib3
+
+# Desabilita avisos de segurança SSL para evitar poluição no terminal
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 ARQUIVO_ESCUDOS = 'escudos.json'
 
-# --- SUAS CONFIGURAÇÕES DE APOSTA ---
+# --- 1. CONFIGURAÇÕES DE ESTRATÉGIA ---
 CONFIG_APOSTAS = {
     "Econômico": {"duplos": 1, "triplos": 0},
     "Econômico Premium": {"duplos": 2, "triplos": 0},
@@ -25,186 +29,207 @@ CONFIG_APOSTAS = {
     "Dono da Zorra Toda": {"duplos": 3, "triplos": 3}
 }
 
-# --- FUNÇÕES DE SUPORTE (ESCUDOS E WEB) ---
+# --- 2. FUNÇÕES DE ESCUDOS (JSON + BUSCA) ---
 def carregar_escudos():
     if os.path.exists(ARQUIVO_ESCUDOS):
-        with open(ARQUIVO_ESCUDOS, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        try:
+            with open(ARQUIVO_ESCUDOS, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except: return {}
     return {}
 
 def salvar_escudos(dic_escudos):
-    with open(ARQUIVO_ESCUDOS, 'w', encoding='utf-8') as f:
-        json.dump(dic_escudos, f, indent=4, ensure_ascii=False)
+    try:
+        with open(ARQUIVO_ESCUDOS, 'w', encoding='utf-8') as f:
+            json.dump(dic_escudos, f, indent=4, ensure_ascii=False)
+    except: pass
 
 def buscar_logo_web(nome_time):
-    # (Mesma lógica anterior para economizar espaço na resposta)
+    print(f"   > 🔍 Buscando escudo online para: {nome_time}...")
     try:
-        results = DDGS().images(keywords=f"escudo {nome_time} futebol png transparent", max_results=1)
+        # Busca imagem PNG transparente
+        results = DDGS().images(
+            keywords=f"escudo {nome_time} futebol png transparent", 
+            max_results=1
+        )
         lista = list(results)
-        if lista: return lista[0]['image']
-    except: pass
-    return "https://via.placeholder.com/40"
-
-# --- LÓGICA DE INTELIGÊNCIA DO ROBÔ ---
-def gerar_palpite(prob_casa, prob_empate, prob_fora, tipo_protecao):
-    """
-    Define o palpite baseando-se na proteção disponível (Triplo, Duplo ou Seco)
-    """
-    probs = {'1': prob_casa, 'X': prob_empate, '2': prob_fora}
-    # Ordena as probabilidades para saber quem é favorito
-    ordenado = sorted(probs.items(), key=lambda item: item[1], reverse=True)
-    fav_sigla = ordenado[0][0] # Ex: '1'
-    vice_sigla = ordenado[1][0] # Ex: 'X'
-
-    if tipo_protecao == "TRIPLO":
-        return "1 X 2 (Qualquer um)", "bg-info" # Azul
-    elif tipo_protecao == "DUPLO":
-        # O duplo cobre o Favorito + o Segundo mais provável
-        # Ordenamos as siglas para ficar bonito (ex: "1X" ou "X2" ou "1 2")
-        palpite = "".join(sorted([fav_sigla, vice_sigla]))
-        if palpite == "12": palpite = "1 2" # Aberto
-        return f"Duplo {palpite}", "bg-warning" # Amarelo
-    else:
-        # Aposta Seca no Favorito
-        return f"Coluna {fav_sigla}", "bg-success text-white" # Verde
-
-def aplicar_estrategia(df, nome_estrategia):
-    config = CONFIG_APOSTAS.get(nome_estrategia, CONFIG_APOSTAS["Econômico"])
-    qtd_triplos = config['triplos']
-    qtd_duplos = config['duplos']
-
-    # 1. Calcular o "Nível de Risco" de cada jogo
-    # Risco = 100 - probabilidade do favorito. Quanto maior, mais difícil o jogo.
-    df['Risco'] = 100 - df[['Prob_Casa', 'Prob_Empate', 'Prob_Fora']].max(axis=1)
-
-    # 2. Ordenar jogos pelo risco (do mais difícil para o mais fácil) para priorizar proteções
-    # Criamos uma coluna temporária de prioridade
-    df_sorted = df.sort_values(by='Risco', ascending=False).copy()
-    indices_triplos = df_sorted.head(qtd_triplos).index
+        if lista:
+            return lista[0]['image']
+    except Exception as e:
+        print(f"     [!] Erro busca img: {e}")
     
-    # Remove os que ganharam triplo para ver quem ganha duplo
-    restante = df_sorted.drop(indices_triplos)
-    indices_duplos = restante.head(qtd_duplos).index
+    # Imagem genérica se falhar
+    return "https://cdn-icons-png.flaticon.com/512/53/53283.png"
 
-    # 3. Aplicar os palpites linha a linha
-    sugestoes = []
-    classes_css = []
-    
-    for idx in df.index:
-        tipo = "SECO"
-        if idx in indices_triplos:
-            tipo = "TRIPLO"
-        elif idx in indices_duplos:
-            tipo = "DUPLO"
-        
-        palpite, css = gerar_palpite(df.at[idx, 'Prob_Casa'], df.at[idx, 'Prob_Empate'], df.at[idx, 'Prob_Fora'], tipo)
-        sugestoes.append(palpite)
-        classes_css.append(css)
-
-    df['Palpite IA'] = sugestoes
-    df['Classe_CSS'] = classes_css # Usado no HTML para colorir
-    return df
-
-# --- EXTRAÇÃO DE DADOS ---
+# --- 3. EXTRAÇÃO DE DADOS (ROBUSTA) ---
 def buscar_dados_vovoteca():
-    # ... (Código de extração do Vovoteca igual ao anterior) ...
-    # ... (Mas retornando colunas numéricas limpas: Prob_Casa, Prob_Empate, Prob_Fora) ...
-    # Vou resumir aqui para focar na lógica da estratégia:
+    print("--- 📥 INICIANDO DOWNLOAD DOS DADOS ---")
     url = "https://vovoteca.com/loteca-enquetes-secos-duplos/"
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    }
+    
     try:
-        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
-        soup = BeautifulSoup(response.content, 'html.parser')
-    except: return pd.DataFrame()
+        # verify=False ignora erros de SSL do site
+        response = requests.get(url, headers=headers, verify=False, timeout=15)
+        response.raise_for_status()
+    except Exception as e:
+        print(f"❌ ERRO DE CONEXÃO: {e}")
+        return pd.DataFrame()
 
+    soup = BeautifulSoup(response.content, 'html.parser')
     dados = []
     dic_escudos = carregar_escudos()
     houve_mudanca = False
 
     for i in range(1, 15):
         try:
-            # (Lógica de scraping idêntica à anterior)
+            # Tenta encontrar a linha do jogo pelo ID
             linha = soup.find('tr', id=f'tr-linha-{i}')
-            if not linha: continue
+            if not linha:
+                continue # Pula se não achar
             
             cols = linha.find_all('td')
+            if len(cols) < 6: continue
+
+            # Extrai nomes
             mandante = cols[1].text.strip()
             visitante = cols[5].text.strip()
             idx = i - 1
             
+            # Extrai porcentagens com tratamento de erro
             try:
                 p1 = float(soup.find('td', id=f'resultado-{idx}-home').text.strip())
                 px = float(soup.find('td', id=f'resultado-{idx}-middle').text.strip())
                 p2 = float(soup.find('td', id=f'resultado-{idx}-away').text.strip())
-            except: p1, px, p2 = 0.0, 0.0, 0.0
+            except:
+                p1, px, p2 = 0.0, 0.0, 0.0
 
-            # Escudos
+            # Gerencia Escudos
             if mandante not in dic_escudos:
                 dic_escudos[mandante] = buscar_logo_web(mandante)
                 houve_mudanca = True
+                time.sleep(0.5) # Pausa leve
+            
             if visitante not in dic_escudos:
                 dic_escudos[visitante] = buscar_logo_web(visitante)
                 houve_mudanca = True
+                time.sleep(0.5)
 
             dados.append({
                 "Jogo": i,
-                "Img1": dic_escudos[mandante],
+                "Img1": dic_escudos.get(mandante, ""),
                 "Mandante": mandante,
                 "Prob_Casa": p1,
                 "Prob_Empate": px,
                 "Prob_Fora": p2,
                 "Visitante": visitante,
-                "Img2": dic_escudos[visitante]
+                "Img2": dic_escudos.get(visitante, "")
             })
-        except: continue
+            print(f"✅ Jogo {i} OK: {mandante} x {visitante}")
+
+        except Exception as e:
+            print(f"⚠️ Erro ao ler jogo {i}: {e}")
+            continue
+
+    if houve_mudanca:
+        salvar_escudos(dic_escudos)
         
-    if houve_mudanca: salvar_escudos(dic_escudos)
     return pd.DataFrame(dados)
 
-# --- ROTA PRINCIPAL ---
+# --- 4. LÓGICA DE INTELIGÊNCIA (IA) ---
+def gerar_palpite(prob_casa, prob_empate, prob_fora, tipo_protecao):
+    probs = {'1': prob_casa, 'X': prob_empate, '2': prob_fora}
+    # Ordena do maior para o menor
+    ordenado = sorted(probs.items(), key=lambda item: item[1], reverse=True)
+    fav_sigla = ordenado[0][0] # O mais provável
+    vice_sigla = ordenado[1][0] # O segundo mais provável
+
+    if tipo_protecao == "TRIPLO":
+        return "TRIPLO (1 X 2)", "bg-primary text-white" # Azul
+    elif tipo_protecao == "DUPLO":
+        palpite = "".join(sorted([fav_sigla, vice_sigla])) # Ex: "1X"
+        if palpite == "12": palpite = "1 2 (Aberto)"
+        return f"DUPLO {palpite}", "bg-warning" # Amarelo
+    else:
+        return f"COLUNA {fav_sigla}", "bg-success text-white" # Verde
+
+def aplicar_estrategia(df, nome_estrategia):
+    if df.empty: return df
+    
+    config = CONFIG_APOSTAS.get(nome_estrategia, CONFIG_APOSTAS["Econômico"])
+    qtd_triplos = config['triplos']
+    qtd_duplos = config['duplos']
+
+    # Calcula RISCO: Quanto menor a % do favorito, maior o risco
+    # Risco = 100 - (maior probabilidade do jogo)
+    df['Risco'] = 100 - df[['Prob_Casa', 'Prob_Empate', 'Prob_Fora']].max(axis=1)
+
+    # Ordena por risco para distribuir Triplos/Duplos nos jogos difíceis
+    df_sorted = df.sort_values(by='Risco', ascending=False)
+    
+    indices_triplos = df_sorted.head(qtd_triplos).index
+    restante = df_sorted.drop(indices_triplos)
+    indices_duplos = restante.head(qtd_duplos).index
+
+    palpites = []
+    classes = []
+
+    for idx in df.index:
+        tipo = "SECO"
+        if idx in indices_triplos: tipo = "TRIPLO"
+        elif idx in indices_duplos: tipo = "DUPLO"
+        
+        txt, css = gerar_palpite(df.at[idx, 'Prob_Casa'], df.at[idx, 'Prob_Empate'], df.at[idx, 'Prob_Fora'], tipo)
+        palpites.append(txt)
+        classes.append(css)
+
+    df['Palpite IA'] = palpites
+    df['Classe_CSS'] = classes
+    return df
+
+# --- 5. ROTA E TEMPLATE HTML ---
 @app.route('/')
 def home():
-    # 1. Pega a estratégia escolhida na URL (padrão: Econômico)
     modo_selecionado = request.args.get('modo', 'Econômico')
     
-    # 2. Busca dados
+    # Busca e processa
     df = buscar_dados_vovoteca()
-    if df.empty: return "Erro ao carregar dados do Vovoteca."
-
-    # 3. Aplica a inteligência
     df_calculado = aplicar_estrategia(df, modo_selecionado)
 
-    # 4. Renderiza HTML
+    # Template HTML embutido
     html = """
     <!doctype html>
     <html lang="pt-br">
     <head>
         <meta charset="utf-8">
+        <title>Robô da Loteca</title>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
         <style>
-            body { background-color: #f4f7f6; font-family: 'Segoe UI', sans-serif; }
-            .card-header { background-color: #2c3e50; color: white; }
-            .img-time { width: 40px; height: 40px; object-fit: contain; }
+            body { background-color: #eef2f3; font-family: 'Segoe UI', sans-serif; }
+            .container { max-width: 1000px; margin-top: 20px; }
+            .card { border: none; shadow: 0 4px 8px rgba(0,0,0,0.1); border-radius: 12px; }
+            .img-time { height: 35px; width: 35px; object-fit: contain; }
+            .prob-col { font-size: 0.85rem; color: #666; }
             td { vertical-align: middle !important; }
-            .prob-bar { height: 4px; background-color: #e9ecef; margin-top: 5px; }
-            .prob-fill { height: 100%; background-color: #28a745; }
+            .palpite-box { padding: 8px; border-radius: 6px; font-weight: bold; font-size: 0.9rem; }
         </style>
     </head>
     <body>
-    <div class="container py-4">
-        <div class="card shadow">
-            <div class="card-header text-center">
-                <h3>🎱 Robô da Loteca Inteligente</h3>
-                <p class="mb-0">Estratégia Atual: <strong>{{ modo }}</strong></p>
+    <div class="container mb-5">
+        <div class="card shadow-sm">
+            <div class="card-header bg-dark text-white text-center py-3">
+                <h3 class="mb-0">🎱 Robô da Loteca Profissional</h3>
+                <small>Estratégia Atual: {{ modo }}</small>
             </div>
             
-            <div class="card-body bg-light">
-                <form method="get" class="row g-3 justify-content-center align-items-center">
+            <div class="card-body bg-light border-bottom">
+                <form method="get" class="row justify-content-center align-items-center g-2">
+                    <div class="col-auto"><label class="fw-bold">Alterar Estratégia:</label></div>
                     <div class="col-auto">
-                        <label class="col-form-label fw-bold">Escolha seu Perfil:</label>
-                    </div>
-                    <div class="col-auto">
-                        <select name="modo" class="form-select" onchange="this.form.submit()">
+                        <select name="modo" class="form-select form-select-sm" onchange="this.form.submit()">
                             {% for nome in opcoes %}
                                 <option value="{{ nome }}" {% if nome == modo %}selected{% endif %}>
                                     {{ nome }} ({{ configs[nome]['duplos'] }}D + {{ configs[nome]['triplos'] }}T)
@@ -215,61 +240,63 @@ def home():
                 </form>
             </div>
 
+            {% if df.empty %}
+                <div class="alert alert-danger m-3 text-center">
+                    ❌ Não foi possível carregar os dados. Verifique o terminal para ver o erro.
+                </div>
+            {% else %}
             <div class="table-responsive">
-                <table class="table table-hover table-striped text-center mb-0">
-                    <thead class="table-dark">
+                <table class="table table-hover table-striped text-center mb-0 align-middle">
+                    <thead class="table-secondary small">
                         <tr>
-                            <th>JG</th>
+                            <th>#</th>
                             <th>Mandante</th>
-                            <th>Probabilidades (%)</th>
+                            <th style="width: 30%">Probabilidades (%)</th>
                             <th>Visitante</th>
-                            <th>Sugestão do Robô</th>
+                            <th>Sugestão IA</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for index, row in df.iterrows() %}
                         <tr>
-                            <td class="fw-bold">{{ row['Jogo'] }}</td>
-                            <td class="text-end">
-                                {{ row['Mandante'] }} <img src="{{ row['Img1'] }}" class="img-time">
+                            <td class="fw-bold text-muted">{{ row['Jogo'] }}</td>
+                            <td class="text-end fw-semibold">
+                                {{ row['Mandante'] }} <img src="{{ row['Img1'] }}" class="img-time ms-1">
                             </td>
-                            <td style="width: 25%;">
-                                <div class="d-flex justify-content-between small text-muted">
+                            <td>
+                                <div class="progress" style="height: 6px; margin-bottom: 4px;">
+                                    <div class="progress-bar bg-success" style="width: {{ row['Prob_Casa'] }}%"></div>
+                                    <div class="progress-bar bg-warning" style="width: {{ row['Prob_Empate'] }}%"></div>
+                                    <div class="progress-bar bg-danger" style="width: {{ row['Prob_Fora'] }}%"></div>
+                                </div>
+                                <div class="d-flex justify-content-between prob-col">
                                     <span>{{ row['Prob_Casa'] }}</span>
                                     <span>{{ row['Prob_Empate'] }}</span>
                                     <span>{{ row['Prob_Fora'] }}</span>
                                 </div>
-                                <div class="progress" style="height: 6px;">
-                                    <div class="progress-bar bg-success" role="progressbar" style="width: {{ row['Prob_Casa'] }}%"></div>
-                                    <div class="progress-bar bg-warning" role="progressbar" style="width: {{ row['Prob_Empate'] }}%"></div>
-                                    <div class="progress-bar bg-danger" role="progressbar" style="width: {{ row['Prob_Fora'] }}%"></div>
+                            </td>
+                            <td class="text-start fw-semibold">
+                                <img src="{{ row['Img2'] }}" class="img-time me-1"> {{ row['Visitante'] }}
+                            </td>
+                            <td>
+                                <div class="palpite-box {{ row['Classe_CSS'] }}">
+                                    {{ row['Palpite IA'] }}
                                 </div>
-                            </td>
-                            <td class="text-start">
-                                <img src="{{ row['Img2'] }}" class="img-time"> {{ row['Visitante'] }}
-                            </td>
-                            <td class="{{ row['Classe_CSS'] }} fw-bold border">
-                                {{ row['Palpite IA'] }}
                             </td>
                         </tr>
                         {% endfor %}
                     </tbody>
                 </table>
             </div>
-            <div class="card-footer text-muted text-center small">
-                Dados do Vovoteca | Escudos via DuckDuckGo | IA de Gerenciamento de Risco
-            </div>
+            {% endif %}
         </div>
     </div>
     </body>
     </html>
     """
     
-    return render_template_string(html, 
-                                  df=df_calculado, 
-                                  modo=modo_selecionado, 
-                                  opcoes=CONFIG_APOSTAS.keys(),
-                                  configs=CONFIG_APOSTAS)
+    return render_template_string(html, df=df_calculado, modo=modo_selecionado, opcoes=CONFIG_APOSTAS.keys(), configs=CONFIG_APOSTAS)
 
 if __name__ == '__main__':
+    # debug=True faz o site atualizar sozinho quando você mexe no código
     app.run(debug=True)
