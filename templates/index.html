@@ -3,23 +3,34 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Loteca Pro IA</title> <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <title>Loteca Pro IA</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        /* ESTILO IOS / APPLE LIMPO */
         body { 
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
-            background-color: #f2f2f7; color: #1c1c1e; margin: 0; padding: 0; overflow-x: hidden; 
+            background-color: #f2f2f7; 
+            color: #1c1c1e; 
+            margin: 0; 
+            padding: 0; 
+            overflow-x: hidden; 
         }
 
-        /* --- TELA DE SELEÇÃO DE ESTRATÉGIA --- */
+        /* TELA 1: CONFIGURAÇÃO */
         #plan-screen { 
-            padding: 20px; max-width: 500px; margin: 0 auto; min-height: 100vh; 
-            display: flex; flex-direction: column; justify-content: center; 
+            padding: 20px; 
+            max-width: 500px; 
+            margin: 0 auto; 
+            min-height: 100vh; 
+            display: flex; 
+            flex-direction: column; 
+            justify-content: center; 
         }
         
         .hero-title {
             text-align: center; font-size: 28px; font-weight: 800; margin-bottom: 10px;
-            background: -webkit-linear-gradient(#007aff, #0051a8); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            background: -webkit-linear-gradient(#007aff, #0051a8); 
+            -webkit-background-clip: text; 
+            -webkit-text-fill-color: transparent;
         }
         .hero-subtitle {
             text-align: center; color: #8e8e93; font-size: 15px; margin-bottom: 30px;
@@ -35,15 +46,11 @@
             letter-spacing: 0.5px; margin-bottom: 8px; font-weight: 600;
         }
 
-        /* Select Moderno */
         select.form-select {
             width: 100%; padding: 16px; font-size: 17px; border-radius: 12px;
             border: 1px solid #e5e5ea; background-color: #f9f9f9; -webkit-appearance: none;
             color: #1c1c1e; font-weight: 600; outline: none; transition: 0.2s;
-            background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23007AFF%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E");
-            background-repeat: no-repeat; background-position: right 15px top 50%; background-size: 12px auto;
         }
-        select.form-select:focus { border-color: #007aff; background-color: #fff; box-shadow: 0 0 0 4px rgba(0,122,255,0.1); }
 
         .info-box {
             margin-top: 15px; padding: 15px; background: #f0f8ff; border-radius: 12px;
@@ -53,24 +60,174 @@
         .info-num { font-size: 20px; font-weight: 800; color: #007aff; display: block; }
         .info-desc { font-size: 12px; color: #555; text-transform: uppercase; }
 
-        /* --- AVISO LEGAL --- */
+        .btn-main {
+            width: 100%; padding: 18px; border: none; border-radius: 16px; font-size: 18px; font-weight: 600;
+            cursor: pointer; color: white;
+            background: linear-gradient(135deg, #007aff 0%, #0051a8 100%);
+            box-shadow: 0 8px 20px rgba(0, 122, 255, 0.3);
+            margin-bottom: 20px;
+        }
+
+        /* AVISO LEGAL */
         .legal-note {
-            margin-top: 30px; padding: 15px; border-top: 1px solid #e5e5ea;
+            padding: 15px; border-top: 1px solid #e5e5ea;
             text-align: center; color: #8e8e93; font-size: 11px; line-height: 1.5;
         }
         .legal-note strong { color: #555; }
 
-        /* --- BOTÕES GERAIS --- */
-        .btn-main {
-            width: 100%; padding: 18px; border: none; border-radius: 16px; font-size: 18px; font-weight: 600;
-            cursor: pointer; transition: transform 0.1s; color: white;
-            background: linear-gradient(135deg, #007aff 0%, #0051a8 100%);
-            box-shadow: 0 8px 20px rgba(0, 122, 255, 0.3);
-        }
-        .btn-main:active { transform: scale(0.97); }
+        /* OUTROS ELEMENTOS (Ocultos inicialmente) */
+        #game-container, #prog-cont, #loader, #results { display: none; }
 
-        /* --- ESTILOS DO JOGO --- */
-        .progress-container { position: sticky; top: 0; background: rgba(242,242,247,0.95); backdrop-filter: blur(10px); z-index: 100; padding: 15px 20px; border-bottom: 1px solid #c6c6c8; }
-        .progress-bar { height: 8px; background: #e5e5ea; border-radius: 4px; overflow: hidden; }
-        .progress-fill { height: 100%; background: #007aff; width: 0%; transition: width 0.3s ease; }
-        .step-text
+        /* Estilos básicos para quando o jogo começar */
+        .container { padding: 20px; max-width: 500px; margin: 0 auto; }
+        .game-card-content { background: white; border-radius: 24px; padding: 25px 20px; margin-bottom:20px; }
+        input { width: 100%; padding: 10px; margin: 5px 0; border: 1px solid #ccc; border-radius: 8px; }
+        
+        .result-item { background: white; padding: 15px; margin-bottom: 10px; border-radius: 12px; border-left: 5px solid gray; }
+        .card-triplo { border-color: #ff3b30; }
+        .card-duplo { border-color: #ffcc00; }
+        .card-seco { border-color: #34c759; }
+    </style>
+</head>
+<body>
+
+    <div id="plan-screen">
+        <div class="hero-title">Loteca Pro IA</div>
+        <div class="hero-subtitle">Estratégia Inteligente</div>
+        
+        <div class="config-card">
+            <label class="form-label">Escolha a Estratégia</label>
+            <select id="planoSelect" class="form-select" onchange="atualizarResumo()">
+                <option value="Econômico" data-d="1" data-t="0">Econômico</option>
+                <option value="Arrojado" data-d="1" data-t="1" selected>Arrojado</option>
+                <option value="Profissional" data-d="0" data-t="2">Profissional</option>
+                <option value="Elite" data-d="0" data-t="5">Elite</option>
+            </select>
+
+            <div class="info-box">
+                <div class="info-item"><span class="info-num" id="info-d">1</span><span class="info-desc">Duplos</span></div>
+                <div class="info-item"><span class="info-num" id="info-t">1</span><span class="info-desc">Triplos</span></div>
+            </div>
+        </div>
+
+        <button class="btn-main" onclick="iniciarApp()">Começar Análise</button>
+
+        <div class="legal-note">
+            ⚠️ <strong>Aviso:</strong> Não garantimos premiação. Uso apenas para entretenimento (18+). Jogue com responsabilidade.
+        </div>
+    </div>
+
+    <div class="container" id="game-container">
+        <h3 style="text-align:center;">Preencha os Jogos</h3>
+        <form id="gameForm">
+            <div id="cards-wrapper"></div>
+            <button type="button" class="btn-main" onclick="submitForm()" style="margin-top:20px;">Processar Palpites</button>
+        </form>
+    </div>
+
+    <div id="loader" style="text-align:center; padding-top:50px;">
+        <h2>🤖 Processando...</h2>
+    </div>
+
+    <div class="container" id="results">
+        <h2 style="text-align:center;">Gabarito Gerado 🏆</h2>
+        <div id="results-list"></div>
+        <button class="btn-main" onclick="location.reload()" style="margin-top:20px;">Novo Jogo</button>
+        <div class="legal-note">
+             🔞 Jogue com responsabilidade.
+        </div>
+    </div>
+
+    <script>
+        // Lógica Simples para garantir funcionamento
+        function atualizarResumo() {
+            const sel = document.getElementById('planoSelect');
+            const opt = sel.options[sel.selectedIndex];
+            document.getElementById('info-d').innerText = opt.getAttribute('data-d');
+            document.getElementById('info-t').innerText = opt.getAttribute('data-t');
+        }
+
+        function iniciarApp() {
+            document.getElementById('plan-screen').style.display = 'none';
+            document.getElementById('game-container').style.display = 'block';
+            gerarCampos();
+        }
+
+        function gerarCampos() {
+            const wrapper = document.getElementById('cards-wrapper');
+            wrapper.innerHTML = '';
+            for(let i=1; i<=14; i++) {
+                wrapper.innerHTML += `
+                    <div class="game-card-content">
+                        <strong>Jogo ${i}</strong><br>
+                        <input type="text" id="m-${i}" placeholder="Mandante">
+                        <input type="text" id="v-${i}" placeholder="Visitante">
+                        <div style="display:flex; gap:5px;">
+                            <input type="number" id="o1-${i}" placeholder="Odd 1">
+                            <input type="number" id="ox-${i}" placeholder="Odd X">
+                            <input type="number" id="o2-${i}" placeholder="Odd 2">
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        async function submitForm() {
+            document.getElementById('game-container').style.display = 'none';
+            document.getElementById('loader').style.display = 'block';
+
+            const plano = document.getElementById('planoSelect').value;
+            const jogos = [];
+            
+            for (let i = 1; i <= 14; i++) {
+                jogos.push({
+                    id: i,
+                    mandante: document.getElementById(`m-${i}`).value || `Time ${i}A`,
+                    visitante: document.getElementById(`v-${i}`).value || `Time ${i}B`,
+                    escudo_m: "", escudo_v: "",
+                    o1: document.getElementById(`o1-${i}`).value || 2.5,
+                    ox: document.getElementById(`ox-${i}`).value || 3.0,
+                    o2: document.getElementById(`o2-${i}`).value || 2.5
+                });
+            }
+
+            try {
+                // Tenta enviar para o Python
+                const res = await fetch('/api/processar', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ jogos: jogos, plano: plano })
+                });
+                
+                if (!res.ok) throw new Error("Erro no servidor");
+
+                const data = await res.json();
+                mostrarResultados(data);
+
+            } catch (error) {
+                alert("Erro ao processar! Verifique se o Python está rodando.");
+                document.getElementById('loader').style.display = 'none';
+                document.getElementById('game-container').style.display = 'block';
+            }
+        }
+
+        function mostrarResultados(data) {
+            document.getElementById('loader').style.display = 'none';
+            document.getElementById('results').style.display = 'block';
+            const list = document.getElementById('results-list');
+            list.innerHTML = '';
+
+            data.sort((a,b) => a.id - b.id);
+
+            data.forEach(item => {
+                list.innerHTML += `
+                    <div class="result-item ${item.classe}">
+                        <strong>Jogo ${item.id}:</strong> ${item.mandante} x ${item.visitante}<br>
+                        Palpite: <b>${item.palpite}</b>
+                    </div>
+                `;
+            });
+        }
+    </script>
+</body>
+</html>
