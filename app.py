@@ -1,3 +1,9 @@
+import pandas as pd
+# Importa a função do outro arquivo
+from coleta_dados_loteca import buscar_dados_vovoteca 
+
+# Chama a função
+df = buscar_dados_vovoteca()
 import os
 import json
 import math
@@ -155,4 +161,5 @@ def processar():
 
 if __name__ == '__main__':
     if not os.path.exists(DB_FILE): salvar_banco_escudos({})
+
     app.run(host='0.0.0.0', port=8080)
