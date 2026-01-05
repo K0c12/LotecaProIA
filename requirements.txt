@@ -1,0 +1,5 @@
+flask
+pandas
+duckduckgo_search
+gunicorn
+openpyxl
