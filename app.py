@@ -1,8 +1,8 @@
 import pandas as pd
-# Importa a função do outro arquivo
+# Importa a função do arquivo coleta_vovoteca.py
 from coleta_vovoteca import buscar_dados_vovoteca 
 
-# Chama a função
+# Chama a função e guarda na variável df
 df = buscar_dados_vovoteca()
 import os
 import json
@@ -163,4 +163,5 @@ if __name__ == '__main__':
     if not os.path.exists(DB_FILE): salvar_banco_escudos({})
 
     app.run(host='0.0.0.0', port=8080)
+
 
