@@ -5,6 +5,7 @@ import pandas as pd
 import json
 import os
 import time
+import traceback # Importante para ver o erro real
 from duckduckgo_search import DDGS
 import urllib3
 
@@ -14,19 +15,19 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 app = Flask(__name__)
 ARQUIVO_ESCUDOS = 'escudos.json'
 
-# --- 1. CONFIGURAÇÕES DE ESTRATÉGIA ---
+# --- 1. CONFIGURAÇÕES DE ESTRATÉGIA (ATUALIZADAS) ---
 CONFIG_APOSTAS = {
-    "Econômico": {"duplos": 1, "triplos": 0},
-    "Econômico Premium": {"duplos": 2, "triplos": 0},
-    "Fortalecido": {"duplos": 3, "triplos": 0},
-    "Arrojado": {"duplos": 0, "triplos": 1},
-    "Profissional": {"duplos": 1, "triplos": 1},
-    "Avançado": {"duplos": 2, "triplos": 1},
-    "Expert": {"duplos": 0, "triplos": 2},
-    "Master": {"duplos": 1, "triplos": 2},
-    "Elite": {"duplos": 2, "triplos": 2},
-    "Magnata": {"duplos": 0, "triplos": 3},
-    "Dono da Zorra Toda": {"duplos": 3, "triplos": 3}
+    "Econômico":          {"duplos": 1, "triplos": 0},
+    "Econômico Premium":  {"duplos": 2, "triplos": 0},
+    "Fortalecido":        {"duplos": 3, "triplos": 0},
+    "Arrojado":           {"duplos": 1, "triplos": 1},
+    "Profissional":       {"duplos": 0, "triplos": 2},
+    "Avançado":           {"duplos": 2, "triplos": 2},
+    "Expert":             {"duplos": 0, "triplos": 3},
+    "Master":             {"duplos": 2, "triplos": 3},
+    "Elite":              {"duplos": 0, "triplos": 5},
+    "Magnata":            {"duplos": 0, "triplos": 6},
+    "Dono da Zorra Toda": {"duplos": 5, "triplos": 3}
 }
 
 # --- 2. FUNÇÕES DE ESCUDOS (JSON + BUSCA) ---
@@ -61,82 +62,105 @@ def buscar_logo_web(nome_time):
     # Imagem genérica se falhar
     return "https://cdn-icons-png.flaticon.com/512/53/53283.png"
 
-# --- 3. EXTRAÇÃO DE DADOS (ROBUSTA) ---
+# --- 3. EXTRAÇÃO DE DADOS (COM DEBUG DO ERRO) ---
 def buscar_dados_vovoteca():
     print("--- 📥 INICIANDO DOWNLOAD DOS DADOS ---")
     url = "https://vovoteca.com/loteca-enquetes-secos-duplos/"
     
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
     }
     
     try:
         # verify=False ignora erros de SSL do site
-        response = requests.get(url, headers=headers, verify=False, timeout=15)
+        response = requests.get(url, headers=headers, verify=False, timeout=20)
         response.raise_for_status()
     except Exception as e:
-        print(f"❌ ERRO DE CONEXÃO: {e}")
+        print(f"❌ ERRO CRÍTICO NA CONEXÃO COM O SITE:")
+        print(e)
         return pd.DataFrame()
 
-    soup = BeautifulSoup(response.content, 'html.parser')
-    dados = []
-    dic_escudos = carregar_escudos()
-    houve_mudanca = False
+    try:
+        soup = BeautifulSoup(response.content, 'html.parser')
+        dados = []
+        dic_escudos = carregar_escudos()
+        houve_mudanca = False
 
-    for i in range(1, 15):
-        try:
-            # Tenta encontrar a linha do jogo pelo ID
-            linha = soup.find('tr', id=f'tr-linha-{i}')
-            if not linha:
-                continue # Pula se não achar
-            
-            cols = linha.find_all('td')
-            if len(cols) < 6: continue
-
-            # Extrai nomes
-            mandante = cols[1].text.strip()
-            visitante = cols[5].text.strip()
-            idx = i - 1
-            
-            # Extrai porcentagens com tratamento de erro
+        # Tenta encontrar tabelas de várias formas caso o site mude
+        for i in range(1, 15):
             try:
-                p1 = float(soup.find('td', id=f'resultado-{idx}-home').text.strip())
-                px = float(soup.find('td', id=f'resultado-{idx}-middle').text.strip())
-                p2 = float(soup.find('td', id=f'resultado-{idx}-away').text.strip())
-            except:
-                p1, px, p2 = 0.0, 0.0, 0.0
+                # Tenta encontrar a linha do jogo pelo ID
+                linha = soup.find('tr', id=f'tr-linha-{i}')
+                if not linha:
+                    # Se falhar, tenta achar qualquer tr que contenha os dados (lógica de fallback)
+                    continue 
+                
+                cols = linha.find_all('td')
+                if len(cols) < 6: continue
 
-            # Gerencia Escudos
-            if mandante not in dic_escudos:
-                dic_escudos[mandante] = buscar_logo_web(mandante)
-                houve_mudanca = True
-                time.sleep(0.5) # Pausa leve
+                # Extrai nomes
+                mandante = cols[1].text.strip()
+                visitante = cols[5].text.strip()
+                idx = i - 1
+                
+                # Extrai porcentagens com tratamento de erro
+                try:
+                    p1_elem = soup.find('td', id=f'resultado-{idx}-home')
+                    px_elem = soup.find('td', id=f'resultado-{idx}-middle')
+                    p2_elem = soup.find('td', id=f'resultado-{idx}-away')
+
+                    # Se não achou pelo ID, tenta pegar da linha
+                    if not p1_elem: p1 = 0.0
+                    else: p1 = float(p1_elem.text.strip().replace('%','').replace(',','.'))
+
+                    if not px_elem: px = 0.0
+                    else: px = float(px_elem.text.strip().replace('%','').replace(',','.'))
+
+                    if not p2_elem: p2 = 0.0
+                    else: p2 = float(p2_elem.text.strip().replace('%','').replace(',','.'))
+
+                except Exception as e:
+                    print(f"Erro ao ler porcentagens jogo {i}: {e}")
+                    p1, px, p2 = 33.3, 33.3, 33.3 # Valores padrão para não quebrar
+
+                # Gerencia Escudos
+                if mandante not in dic_escudos:
+                    dic_escudos[mandante] = buscar_logo_web(mandante)
+                    houve_mudanca = True
+                    time.sleep(0.5) 
+                
+                if visitante not in dic_escudos:
+                    dic_escudos[visitante] = buscar_logo_web(visitante)
+                    houve_mudanca = True
+                    time.sleep(0.5)
+
+                dados.append({
+                    "Jogo": i,
+                    "Img1": dic_escudos.get(mandante, ""),
+                    "Mandante": mandante,
+                    "Prob_Casa": p1,
+                    "Prob_Empate": px,
+                    "Prob_Fora": p2,
+                    "Visitante": visitante,
+                    "Img2": dic_escudos.get(visitante, "")
+                })
+                print(f"✅ Jogo {i} OK: {mandante} x {visitante}")
+
+            except Exception as e:
+                print(f"⚠️ Erro ao processar linha do jogo {i}: {e}")
+                traceback.print_exc() # MOSTRA O ERRO DETALHADO
+                continue
+
+        if houve_mudanca:
+            salvar_escudos(dic_escudos)
             
-            if visitante not in dic_escudos:
-                dic_escudos[visitante] = buscar_logo_web(visitante)
-                houve_mudanca = True
-                time.sleep(0.5)
-
-            dados.append({
-                "Jogo": i,
-                "Img1": dic_escudos.get(mandante, ""),
-                "Mandante": mandante,
-                "Prob_Casa": p1,
-                "Prob_Empate": px,
-                "Prob_Fora": p2,
-                "Visitante": visitante,
-                "Img2": dic_escudos.get(visitante, "")
-            })
-            print(f"✅ Jogo {i} OK: {mandante} x {visitante}")
-
-        except Exception as e:
-            print(f"⚠️ Erro ao ler jogo {i}: {e}")
-            continue
-
-    if houve_mudanca:
-        salvar_escudos(dic_escudos)
-        
-    return pd.DataFrame(dados)
+        return pd.DataFrame(dados)
+    
+    except Exception as e:
+        print("❌ ERRO NO PROCESSAMENTO DO HTML:")
+        traceback.print_exc() # ISSO É O QUE VAI TE MOSTRAR O ERRO
+        return pd.DataFrame()
 
 # --- 4. LÓGICA DE INTELIGÊNCIA (IA) ---
 def gerar_palpite(prob_casa, prob_empate, prob_fora, tipo_protecao):
@@ -204,7 +228,7 @@ def home():
     <html lang="pt-br">
     <head>
         <meta charset="utf-8">
-        <title>Robô da Loteca</title>
+        <title>Loteca pro IA</title>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
         <style>
@@ -221,7 +245,7 @@ def home():
     <div class="container mb-5">
         <div class="card shadow-sm">
             <div class="card-header bg-dark text-white text-center py-3">
-                <h3 class="mb-0">🎱 Robô da Loteca Profissional</h3>
+                <h3 class="mb-0">🎱 Loteca pro IA</h3>
                 <small>Estratégia Atual: {{ modo }}</small>
             </div>
             
@@ -242,7 +266,8 @@ def home():
 
             {% if df.empty %}
                 <div class="alert alert-danger m-3 text-center">
-                    ❌ Não foi possível carregar os dados. Verifique o terminal para ver o erro.
+                    <h4>❌ Erro na Coleta de Dados</h4>
+                    <p>Não foi possível carregar os jogos. Verifique o terminal para ver o motivo exato.</p>
                 </div>
             {% else %}
             <div class="table-responsive">
@@ -298,5 +323,4 @@ def home():
     return render_template_string(html, df=df_calculado, modo=modo_selecionado, opcoes=CONFIG_APOSTAS.keys(), configs=CONFIG_APOSTAS)
 
 if __name__ == '__main__':
-    # debug=True faz o site atualizar sozinho quando você mexe no código
-    app.run(debug=True)
+    app.run(debug=True, port=10000)
