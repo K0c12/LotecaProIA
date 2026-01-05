@@ -1,5 +1,8 @@
 flask
+requests
+beautifulsoup4
 pandas
 duckduckgo_search
 gunicorn
 openpyxl
+
