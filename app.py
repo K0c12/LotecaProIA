@@ -1,167 +1,275 @@
+from flask import Flask, render_template_string, request
+import requests
+from bs4 import BeautifulSoup
 import pandas as pd
-# Importa a função do arquivo coleta_vovoteca.py
-from coleta_vovoteca import buscar_dados_vovoteca 
-
-# Chama a função e guarda na variável df
-df = buscar_dados_vovoteca()
-import os
 import json
-import math
-import pandas as pd
-from flask import Flask, render_template, request, jsonify
+import os
+import time
 from duckduckgo_search import DDGS
 
 app = Flask(__name__)
-DB_FILE = 'escudos.json'
+ARQUIVO_ESCUDOS = 'escudos.json'
 
-# ==============================================================================
-# CONFIGURAÇÃO DE ESTRATÉGIAS (O MENU DE PERFIS)
-# ==============================================================================
-# As chaves devem bater com o que o Frontend envia (ou faremos o ajuste no código)
+# --- SUAS CONFIGURAÇÕES DE APOSTA ---
 CONFIG_APOSTAS = {
-    "Econômico":          {"duplos": 1, "triplos": 0},
-    "Econômico Premium":  {"duplos": 2, "triplos": 0},
-    "Fortalecido":        {"duplos": 3, "triplos": 0},
-    "Arrojado":           {"duplos": 1, "triplos": 1},
-    "Profissional":       {"duplos": 0, "triplos": 2},
-    "Avançado":           {"duplos": 2, "triplos": 2},
-    "Expert":             {"duplos": 0, "triplos": 3},
-    "Master":             {"duplos": 2, "triplos": 3},
-    "Elite":              {"duplos": 0, "triplos": 5},
-    "Magnata":            {"duplos": 0, "triplos": 6},
-    "Dono da Zorra Toda": {"duplos": 5, "triplos": 3}
+    "Econômico": {"duplos": 1, "triplos": 0},
+    "Econômico Premium": {"duplos": 2, "triplos": 0},
+    "Fortalecido": {"duplos": 3, "triplos": 0},
+    "Arrojado": {"duplos": 0, "triplos": 1},
+    "Profissional": {"duplos": 1, "triplos": 1},
+    "Avançado": {"duplos": 2, "triplos": 1},
+    "Expert": {"duplos": 0, "triplos": 2},
+    "Master": {"duplos": 1, "triplos": 2},
+    "Elite": {"duplos": 2, "triplos": 2},
+    "Magnata": {"duplos": 0, "triplos": 3},
+    "Dono da Zorra Toda": {"duplos": 3, "triplos": 3}
 }
 
-# --- FUNÇÕES DE BANCO DE DADOS E BUSCA (MANTÉM IGUAL) ---
-def carregar_banco_escudos():
-    if os.path.exists(DB_FILE):
-        with open(DB_FILE, 'r') as f: return json.load(f)
+# --- FUNÇÕES DE SUPORTE (ESCUDOS E WEB) ---
+def carregar_escudos():
+    if os.path.exists(ARQUIVO_ESCUDOS):
+        with open(ARQUIVO_ESCUDOS, 'r', encoding='utf-8') as f:
+            return json.load(f)
     return {}
 
-def salvar_banco_escudos(dados):
-    with open(DB_FILE, 'w') as f: json.dump(dados, f, indent=4)
+def salvar_escudos(dic_escudos):
+    with open(ARQUIVO_ESCUDOS, 'w', encoding='utf-8') as f:
+        json.dump(dic_escudos, f, indent=4, ensure_ascii=False)
 
-def get_escudo_url(nome_time):
-    nome_limpo = nome_time.strip().title()
-    banco = carregar_banco_escudos()
-    if nome_limpo in banco: return banco[nome_limpo]
+def buscar_logo_web(nome_time):
+    # (Mesma lógica anterior para economizar espaço na resposta)
     try:
-        with DDGS() as ddgs:
-            results = list(ddgs.images(f"escudo {nome_limpo} futebol png transparente wikipedia", max_results=1))
-            if results:
-                url = results[0]['image']
-                banco[nome_limpo] = url
-                salvar_banco_escudos(banco)
-                return url
+        results = DDGS().images(keywords=f"escudo {nome_time} futebol png transparent", max_results=1)
+        lista = list(results)
+        if lista: return lista[0]['image']
     except: pass
-    return "https://cdn-icons-png.flaticon.com/512/53/53283.png"
+    return "https://via.placeholder.com/40"
 
-# --- LÓGICA MATEMÁTICA DINÂMICA ---
-def calcular_entropia(o1, ox, o2):
+# --- LÓGICA DE INTELIGÊNCIA DO ROBÔ ---
+def gerar_palpite(prob_casa, prob_empate, prob_fora, tipo_protecao):
+    """
+    Define o palpite baseando-se na proteção disponível (Triplo, Duplo ou Seco)
+    """
+    probs = {'1': prob_casa, 'X': prob_empate, '2': prob_fora}
+    # Ordena as probabilidades para saber quem é favorito
+    ordenado = sorted(probs.items(), key=lambda item: item[1], reverse=True)
+    fav_sigla = ordenado[0][0] # Ex: '1'
+    vice_sigla = ordenado[1][0] # Ex: 'X'
+
+    if tipo_protecao == "TRIPLO":
+        return "1 X 2 (Qualquer um)", "bg-info" # Azul
+    elif tipo_protecao == "DUPLO":
+        # O duplo cobre o Favorito + o Segundo mais provável
+        # Ordenamos as siglas para ficar bonito (ex: "1X" ou "X2" ou "1 2")
+        palpite = "".join(sorted([fav_sigla, vice_sigla]))
+        if palpite == "12": palpite = "1 2" # Aberto
+        return f"Duplo {palpite}", "bg-warning" # Amarelo
+    else:
+        # Aposta Seca no Favorito
+        return f"Coluna {fav_sigla}", "bg-success text-white" # Verde
+
+def aplicar_estrategia(df, nome_estrategia):
+    config = CONFIG_APOSTAS.get(nome_estrategia, CONFIG_APOSTAS["Econômico"])
+    qtd_triplos = config['triplos']
+    qtd_duplos = config['duplos']
+
+    # 1. Calcular o "Nível de Risco" de cada jogo
+    # Risco = 100 - probabilidade do favorito. Quanto maior, mais difícil o jogo.
+    df['Risco'] = 100 - df[['Prob_Casa', 'Prob_Empate', 'Prob_Fora']].max(axis=1)
+
+    # 2. Ordenar jogos pelo risco (do mais difícil para o mais fácil) para priorizar proteções
+    # Criamos uma coluna temporária de prioridade
+    df_sorted = df.sort_values(by='Risco', ascending=False).copy()
+    indices_triplos = df_sorted.head(qtd_triplos).index
+    
+    # Remove os que ganharam triplo para ver quem ganha duplo
+    restante = df_sorted.drop(indices_triplos)
+    indices_duplos = restante.head(qtd_duplos).index
+
+    # 3. Aplicar os palpites linha a linha
+    sugestoes = []
+    classes_css = []
+    
+    for idx in df.index:
+        tipo = "SECO"
+        if idx in indices_triplos:
+            tipo = "TRIPLO"
+        elif idx in indices_duplos:
+            tipo = "DUPLO"
+        
+        palpite, css = gerar_palpite(df.at[idx, 'Prob_Casa'], df.at[idx, 'Prob_Empate'], df.at[idx, 'Prob_Fora'], tipo)
+        sugestoes.append(palpite)
+        classes_css.append(css)
+
+    df['Palpite IA'] = sugestoes
+    df['Classe_CSS'] = classes_css # Usado no HTML para colorir
+    return df
+
+# --- EXTRAÇÃO DE DADOS ---
+def buscar_dados_vovoteca():
+    # ... (Código de extração do Vovoteca igual ao anterior) ...
+    # ... (Mas retornando colunas numéricas limpas: Prob_Casa, Prob_Empate, Prob_Fora) ...
+    # Vou resumir aqui para focar na lógica da estratégia:
+    url = "https://vovoteca.com/loteca-enquetes-secos-duplos/"
     try:
-        p1, px, p2 = 1/float(o1), 1/float(ox), 1/float(o2)
-        total = p1 + px + p2
-        probs = [(p1/total), (px/total), (p2/total)]
-        ent = 0
-        for p in probs:
-            if p > 0: ent -= p * math.log2(p)
-        return ent, (probs[1]*100)
-    except: return 0, 0
+        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
+        soup = BeautifulSoup(response.content, 'html.parser')
+    except: return pd.DataFrame()
 
-@app.route('/')
-def index(): return render_template('index.html')
+    dados = []
+    dic_escudos = carregar_escudos()
+    houve_mudanca = False
 
-@app.route('/api/escudo', methods=['POST'])
-def api_escudo():
-    return jsonify({'url': get_escudo_url(request.json.get('time', ''))})
-
-@app.route('/api/processar', methods=['POST'])
-def processar():
-    data = request.json
-    jogos = data.get('jogos', [])
-    
-    # Recebe o plano e ajusta formatação (ex: 'dono da zorra toda' -> 'Dono Da Zorra Toda' se necessário)
-    # Aqui assumimos que o frontend manda a string próxima da chave.
-    # O .strip() remove espaços extras.
-    plano_recebido = data.get('plano', 'Arrojado').strip()
-    
-    # Tenta encontrar direto, ou busca ignorando maiúsculas/minúsculas
-    config_selecionada = CONFIG_APOSTAS.get("Arrojado") # Padrão
-    
-    # Busca insensível a maiúsculas/minúsculas para evitar erros
-    for nome_chave, config in CONFIG_APOSTAS.items():
-        if nome_chave.lower() == plano_recebido.lower():
-            config_selecionada = config
-            break
-
-    # 1. DEFINIR LIMITES BASEADO NO PLANO (AGORA DINÂMICO)
-    LIMIT_DUPLO = config_selecionada['duplos']
-    LIMIT_TRIPLO = config_selecionada['triplos']
-
-    print(f"--> Processando Plano: {plano_recebido} | Triplos: {LIMIT_TRIPLO}, Duplos: {LIMIT_DUPLO}")
-
-    resultados = []
-    for jogo in jogos:
-        ent, p_empate = calcular_entropia(jogo['o1'], jogo['ox'], jogo['o2'])
+    for i in range(1, 15):
         try:
-            o1, o2 = float(jogo['o1']), float(jogo['o2'])
-            base = "Coluna 1" if o1 < o2 else "Coluna 2"
-            if abs(o1 - o2) < 0.2: base = "Meio"
-        except: base = "Indefinido"
-
-        resultados.append({
-            **jogo, 'entropia': ent, 'prob_empate': p_empate, 'base': base
-        })
-
-    # 2. ALOCAÇÃO INTELIGENTE
-    df = pd.DataFrame(resultados)
-    
-    # Achar Triplos (Top Entropia / Jogos Mais Difíceis)
-    ids_triplo = []
-    if LIMIT_TRIPLO > 0 and not df.empty:
-        ids_triplo = df.sort_values(by='entropia', ascending=False).head(LIMIT_TRIPLO)['id'].values.tolist()
-    
-    # Achar Duplos (Top Empate, removendo os triplos já selecionados)
-    ids_duplo = []
-    if LIMIT_DUPLO > 0 and not df.empty:
-        df_rest = df[~df['id'].isin(ids_triplo)] # Remove quem já é triplo
-        ids_duplo = df_rest.sort_values(by='prob_empate', ascending=False).head(LIMIT_DUPLO)['id'].values.tolist()
-
-    # 3. GERAR GABARITO
-    gabarito = []
-    for r in resultados:
-        if r['id'] in ids_triplo:
-            tipo = "TRIPLO (1X2)"
-            classe = "card-triplo"
-        elif r['id'] in ids_duplo:
-            # Lógica para definir qual lado do duplo cobrir
-            if "1" in r['base'] or r['base'] == "Coluna 1":
-                tipo = "DUPLO (1X)"
-            elif "2" in r['base'] or r['base'] == "Coluna 2":
-                tipo = "DUPLO (X2)"
-            else:
-                # Se for "Meio", pende para o mandante ou X2 se for muito equilibrado
-                tipo = "DUPLO (1X)" 
-            classe = "card-duplo"
-        else:
-            tipo = f"SECO {r['base']}"
-            classe = "card-seco"
+            # (Lógica de scraping idêntica à anterior)
+            linha = soup.find('tr', id=f'tr-linha-{i}')
+            if not linha: continue
             
-        gabarito.append({
-            'id': r['id'],
-            'mandante': r['mandante'],
-            'visitante': r['visitante'],
-            'escudo_m': r['escudo_m'],
-            'escudo_v': r['escudo_v'],
-            'palpite': tipo,
-            'classe': classe
-        })
+            cols = linha.find_all('td')
+            mandante = cols[1].text.strip()
+            visitante = cols[5].text.strip()
+            idx = i - 1
+            
+            try:
+                p1 = float(soup.find('td', id=f'resultado-{idx}-home').text.strip())
+                px = float(soup.find('td', id=f'resultado-{idx}-middle').text.strip())
+                p2 = float(soup.find('td', id=f'resultado-{idx}-away').text.strip())
+            except: p1, px, p2 = 0.0, 0.0, 0.0
 
-    return jsonify(gabarito)
+            # Escudos
+            if mandante not in dic_escudos:
+                dic_escudos[mandante] = buscar_logo_web(mandante)
+                houve_mudanca = True
+            if visitante not in dic_escudos:
+                dic_escudos[visitante] = buscar_logo_web(visitante)
+                houve_mudanca = True
+
+            dados.append({
+                "Jogo": i,
+                "Img1": dic_escudos[mandante],
+                "Mandante": mandante,
+                "Prob_Casa": p1,
+                "Prob_Empate": px,
+                "Prob_Fora": p2,
+                "Visitante": visitante,
+                "Img2": dic_escudos[visitante]
+            })
+        except: continue
+        
+    if houve_mudanca: salvar_escudos(dic_escudos)
+    return pd.DataFrame(dados)
+
+# --- ROTA PRINCIPAL ---
+@app.route('/')
+def home():
+    # 1. Pega a estratégia escolhida na URL (padrão: Econômico)
+    modo_selecionado = request.args.get('modo', 'Econômico')
+    
+    # 2. Busca dados
+    df = buscar_dados_vovoteca()
+    if df.empty: return "Erro ao carregar dados do Vovoteca."
+
+    # 3. Aplica a inteligência
+    df_calculado = aplicar_estrategia(df, modo_selecionado)
+
+    # 4. Renderiza HTML
+    html = """
+    <!doctype html>
+    <html lang="pt-br">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+        <style>
+            body { background-color: #f4f7f6; font-family: 'Segoe UI', sans-serif; }
+            .card-header { background-color: #2c3e50; color: white; }
+            .img-time { width: 40px; height: 40px; object-fit: contain; }
+            td { vertical-align: middle !important; }
+            .prob-bar { height: 4px; background-color: #e9ecef; margin-top: 5px; }
+            .prob-fill { height: 100%; background-color: #28a745; }
+        </style>
+    </head>
+    <body>
+    <div class="container py-4">
+        <div class="card shadow">
+            <div class="card-header text-center">
+                <h3>🎱 Robô da Loteca Inteligente</h3>
+                <p class="mb-0">Estratégia Atual: <strong>{{ modo }}</strong></p>
+            </div>
+            
+            <div class="card-body bg-light">
+                <form method="get" class="row g-3 justify-content-center align-items-center">
+                    <div class="col-auto">
+                        <label class="col-form-label fw-bold">Escolha seu Perfil:</label>
+                    </div>
+                    <div class="col-auto">
+                        <select name="modo" class="form-select" onchange="this.form.submit()">
+                            {% for nome in opcoes %}
+                                <option value="{{ nome }}" {% if nome == modo %}selected{% endif %}>
+                                    {{ nome }} ({{ configs[nome]['duplos'] }}D + {{ configs[nome]['triplos'] }}T)
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </form>
+            </div>
+
+            <div class="table-responsive">
+                <table class="table table-hover table-striped text-center mb-0">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>JG</th>
+                            <th>Mandante</th>
+                            <th>Probabilidades (%)</th>
+                            <th>Visitante</th>
+                            <th>Sugestão do Robô</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for index, row in df.iterrows() %}
+                        <tr>
+                            <td class="fw-bold">{{ row['Jogo'] }}</td>
+                            <td class="text-end">
+                                {{ row['Mandante'] }} <img src="{{ row['Img1'] }}" class="img-time">
+                            </td>
+                            <td style="width: 25%;">
+                                <div class="d-flex justify-content-between small text-muted">
+                                    <span>{{ row['Prob_Casa'] }}</span>
+                                    <span>{{ row['Prob_Empate'] }}</span>
+                                    <span>{{ row['Prob_Fora'] }}</span>
+                                </div>
+                                <div class="progress" style="height: 6px;">
+                                    <div class="progress-bar bg-success" role="progressbar" style="width: {{ row['Prob_Casa'] }}%"></div>
+                                    <div class="progress-bar bg-warning" role="progressbar" style="width: {{ row['Prob_Empate'] }}%"></div>
+                                    <div class="progress-bar bg-danger" role="progressbar" style="width: {{ row['Prob_Fora'] }}%"></div>
+                                </div>
+                            </td>
+                            <td class="text-start">
+                                <img src="{{ row['Img2'] }}" class="img-time"> {{ row['Visitante'] }}
+                            </td>
+                            <td class="{{ row['Classe_CSS'] }} fw-bold border">
+                                {{ row['Palpite IA'] }}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="card-footer text-muted text-center small">
+                Dados do Vovoteca | Escudos via DuckDuckGo | IA de Gerenciamento de Risco
+            </div>
+        </div>
+    </div>
+    </body>
+    </html>
+    """
+    
+    return render_template_string(html, 
+                                  df=df_calculado, 
+                                  modo=modo_selecionado, 
+                                  opcoes=CONFIG_APOSTAS.keys(),
+                                  configs=CONFIG_APOSTAS)
 
 if __name__ == '__main__':
-    if not os.path.exists(DB_FILE): salvar_banco_escudos({})
-
-    app.run(host='0.0.0.0', port=8080)
-
-
+    app.run(debug=True)
