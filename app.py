@@ -1,12 +1,13 @@
-from flask import Flask, render_template_string, request
+from flask import Flask, render_template_string, request, redirect, url_for
 import pandas as pd
 import json
 import os
+# IMPORTA A FUNÇÃO DO OUTRO ARQUIVO
+from coleta import executar_coleta 
 
 app = Flask(__name__)
 NOME_ARQUIVO_DADOS = 'jogos.json'
 
-# --- CONFIGURAÇÕES DE ESTRATÉGIA ---
 CONFIG_APOSTAS = {
     "Econômico":          {"duplos": 1, "triplos": 0},
     "Fortalecido":        {"duplos": 3, "triplos": 0},
@@ -15,25 +16,19 @@ CONFIG_APOSTAS = {
     "Dono da Zorra Toda": {"duplos": 5, "triplos": 3}
 }
 
-# --- FUNÇÃO PARA LER OS DADOS JÁ BAIXADOS ---
 def carregar_dados_do_arquivo():
     if not os.path.exists(NOME_ARQUIVO_DADOS):
-        # Se o usuário esqueceu de rodar o coleta.py, cria um arquivo de emergência
-        return [], "ERRO: Rode o coleta.py primeiro!"
-    
+        return [], "Sem dados. Clique em Atualizar!"
     try:
         with open(NOME_ARQUIVO_DADOS, 'r', encoding='utf-8') as f:
             pacote = json.load(f)
             return pacote['jogos'], pacote['fonte']
-    except:
-        return [], "Arquivo Corrompido"
+    except: return [], "Erro no arquivo."
 
-# --- LÓGICA IA ---
 def gerar_palpite(p1, px, p2, tipo):
     probs = {'1': p1, 'X': px, '2': p2}
     ordenado = sorted(probs.items(), key=lambda x: x[1], reverse=True)
     fav, vice = ordenado[0][0], ordenado[1][0]
-
     if tipo == "TRIPLO": return "TRIPLO (1 X 2)", "bg-primary text-white"
     elif tipo == "DUPLO":
         palpite = "".join(sorted([fav, vice])).replace('12', '1 2')
@@ -43,32 +38,36 @@ def gerar_palpite(p1, px, p2, tipo):
 def aplicar_estrategia(df, nome_estrategia):
     if df.empty: return df
     config = CONFIG_APOSTAS.get(nome_estrategia, CONFIG_APOSTAS["Econômico"])
-    
     df['Risco'] = 100 - df[['Prob_Casa', 'Prob_Empate', 'Prob_Fora']].max(axis=1)
     df_sorted = df.sort_values(by='Risco', ascending=False)
-    
     ind_triplos = df_sorted.head(config['triplos']).index
     restante = df_sorted.drop(ind_triplos)
     ind_duplos = restante.head(config['duplos']).index
-
     palpites, classes = [], []
     for idx in df.index:
         tipo = "TRIPLO" if idx in ind_triplos else "DUPLO" if idx in ind_duplos else "SECO"
         txt, css = gerar_palpite(df.at[idx,'Prob_Casa'], df.at[idx,'Prob_Empate'], df.at[idx,'Prob_Fora'], tipo)
         palpites.append(txt)
         classes.append(css)
-
     df['Palpite IA'] = palpites
     df['Classe_CSS'] = classes
     return df.sort_values(by='Jogo')
 
-# --- ROTAS FLASK ---
+# --- NOVA ROTA PARA O BOTÃO ---
+@app.route('/atualizar_agora')
+def forcar_atualizacao():
+    try:
+        print("🔄 Iniciando atualização solicitada pelo usuário...")
+        executar_coleta() # Chama o script coleta.py
+        return redirect(url_for('home')) # Volta para a home recarregada
+    except Exception as e:
+        return f"Erro ao atualizar: {e}"
+
 @app.route('/', methods=['GET', 'POST'])
 def home():
     modo = request.args.get('modo', 'Econômico')
 
     if request.method == 'POST':
-        # PROCESSA O CÁLCULO
         modo = request.form.get('modo_selecionado')
         dados_form = []
         for i in range(1, 15):
@@ -79,31 +78,21 @@ def home():
             px = 100 - (p1 + p2)
             if px < 0: px = 0
             dados_form.append({"Jogo": i, "Mandante": mandante, "Visitante": visitante, "Prob_Casa": p1, "Prob_Empate": px, "Prob_Fora": p2})
-        
         df_final = aplicar_estrategia(pd.DataFrame(dados_form), modo)
         return render_resultado(df_final, modo)
 
-    # CARREGA OS DADOS DO ARQUIVO JSON
     dados_lista, fonte = carregar_dados_do_arquivo()
-    
-    # Se a lista estiver vazia (arquivo não existe), avisa o usuário
-    if not dados_lista:
-        return f"<h1>⚠️ ATENÇÃO</h1><p>O arquivo de jogos não foi encontrado.</p><p>Por favor, vá no terminal e rode o comando: <code>python coleta.py</code> para baixar os jogos.</p>"
+    if not dados_lista: fonte = "Nenhum dado encontrado"
 
-    # Prepara os dados para os Sliders
     lista_jogos_sliders = []
     for row in dados_lista:
         lista_jogos_sliders.append({
-            "Mandante": row['Mandante'], 
-            "Visitante": row['Visitante'],
-            "p1": int(row['Prob_Casa']),
-            "p2": int(row['Prob_Fora']),
-            "px": int(row['Prob_Empate'])
+            "Mandante": row['Mandante'], "Visitante": row['Visitante'],
+            "p1": int(row['Prob_Casa']), "p2": int(row['Prob_Fora']), "px": int(row['Prob_Empate'])
         })
         
     return render_manual(modo, lista_jogos_sliders, fonte)
 
-# --- FRONT END ---
 def render_manual(modo, jogos, fonte):
     html = """
     <!doctype html>
@@ -116,14 +105,19 @@ def render_manual(modo, jogos, fonte):
             body { background: #eef2f3; font-family: sans-serif; }
             .card-game { background: white; border-radius: 12px; padding: 15px; margin-bottom: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
             input[type=range] { width: 100%; cursor: pointer; }
-            .team-title { font-weight: bold; font-size: 1.1rem; }
+            .btn-refresh { position: fixed; bottom: 20px; right: 20px; z-index: 1000; border-radius: 50px; padding: 15px 25px; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }
         </style>
     </head>
     <body>
+    
+    <a href="/atualizar_agora" class="btn btn-primary btn-refresh fw-bold">
+        🔄 Atualizar Dados
+    </a>
+
     <div class="container py-3">
         <div class="alert alert-success text-center shadow-sm">
-            📁 <strong>Dados lidos do arquivo local</strong><br>
-            Fonte original: {{ fonte }}
+            📁 <strong>Fonte: {{ fonte }}</strong><br>
+            Ajuste as barras ou clique em Calcular!
         </div>
         
         <form method="POST" action="/">
@@ -143,12 +137,11 @@ def render_manual(modo, jogos, fonte):
                     <div class="w-100 text-center">
                         <input type="hidden" name="time1_{{ loop.index }}" value="{{ jogo.Mandante }}">
                         <input type="hidden" name="time2_{{ loop.index }}" value="{{ jogo.Visitante }}">
-                        <span class="team-title text-primary">{{ jogo.Mandante }}</span> 
+                        <span class="fw-bold text-primary">{{ jogo.Mandante }}</span> 
                         <span class="small text-muted fw-bold">vs</span> 
-                        <span class="team-title text-danger">{{ jogo.Visitante }}</span>
+                        <span class="fw-bold text-danger">{{ jogo.Visitante }}</span>
                     </div>
                 </div>
-
                 <div class="row g-2 align-items-center">
                     <div class="col-12">
                         <div class="d-flex justify-content-between small">
@@ -165,7 +158,6 @@ def render_manual(modo, jogos, fonte):
                                name="range2_{{ loop.index }}" id="r2_{{ loop.index }}" oninput="att({{ loop.index }}, 'fora')">
                     </div>
                 </div>
-
                 <div class="mt-2 text-center bg-light rounded p-1">
                     <small class="text-muted fw-bold">Empate: <span id="tx_{{ loop.index }}" class="text-warning">{{ jogo.px }}%</span></small>
                     <div class="progress" style="height: 10px;">
@@ -189,13 +181,8 @@ def render_manual(modo, jogos, fonte):
         let r2 = document.getElementById('r2_' + id);
         let v1 = parseInt(r1.value);
         let v2 = parseInt(r2.value);
-
-        if (v1 + v2 > 100) {
-            if (origem === 'casa') { v2 = 100 - v1; r2.value = v2; }
-            else { v1 = 100 - v2; r1.value = v1; }
-        }
+        if (v1 + v2 > 100) { if (origem === 'casa') { v2 = 100 - v1; r2.value = v2; } else { v1 = 100 - v2; r1.value = v1; } }
         let vx = 100 - (v1 + v2);
-
         document.getElementById('t1_' + id).innerText = v1;
         document.getElementById('t2_' + id).innerText = v2;
         document.getElementById('tx_' + id).innerText = vx + '%';
@@ -249,7 +236,7 @@ def render_resultado(df, modo):
                     </table>
                 </div>
             </div>
-            <div class="card-footer"><a href="/" class="btn btn-outline-dark w-100">🔄 Ajustar / Recalcular</a></div>
+            <div class="card-footer"><a href="/" class="btn btn-outline-dark w-100">🔄 Voltar</a></div>
         </div>
     </div>
     </body>
